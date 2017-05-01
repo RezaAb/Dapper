@@ -94,6 +94,13 @@ namespace Dapper.Contrib.Extensions
             {
                 return p.GetCustomAttributes(true).Any(a => a is KeyAttribute);
             }).ToList();
+            
+            //for ordering key columns
+            keyProperties = (from property in keyProperties
+                let orderAttribute =
+                    property.GetCustomAttributes(typeof (KeyAttribute), false).SingleOrDefault() as KeyAttribute
+                orderby orderAttribute.Order
+                select property).ToList();
 
             if (keyProperties.Count == 0)
             {
@@ -664,6 +671,15 @@ namespace Dapper.Contrib.Extensions
     [AttributeUsage(AttributeTargets.Property)]
     public class KeyAttribute : Attribute
     {
+        public KeyAttribute()
+        {
+            Order = 0;
+        }
+        public KeyAttribute(int keyOrder)
+        {
+            Order = keyOrder;
+        }
+        public int Order { get; set; }
     }
 
     [AttributeUsage(AttributeTargets.Property)]
