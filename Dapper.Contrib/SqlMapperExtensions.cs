@@ -35,6 +35,7 @@ namespace Dapper.Contrib.Extensions
 
         private static readonly ConcurrentDictionary<RuntimeTypeHandle, IEnumerable<PropertyInfo>> KeyProperties = new ConcurrentDictionary<RuntimeTypeHandle, IEnumerable<PropertyInfo>>();
         private static readonly ConcurrentDictionary<RuntimeTypeHandle, IEnumerable<PropertyInfo>> ExplicitKeyProperties = new ConcurrentDictionary<RuntimeTypeHandle, IEnumerable<PropertyInfo>>();
+        private static readonly ConcurrentDictionary<RuntimeTypeHandle, IEnumerable<PropertyInfo>> KeyAndExplicitKeyProperties = new ConcurrentDictionary<RuntimeTypeHandle, IEnumerable<PropertyInfo>>();
         private static readonly ConcurrentDictionary<RuntimeTypeHandle, IEnumerable<PropertyInfo>> TypeProperties = new ConcurrentDictionary<RuntimeTypeHandle, IEnumerable<PropertyInfo>>();
         private static readonly ConcurrentDictionary<RuntimeTypeHandle, IEnumerable<PropertyInfo>> ComputedProperties = new ConcurrentDictionary<RuntimeTypeHandle, IEnumerable<PropertyInfo>>();
         private static readonly ConcurrentDictionary<RuntimeTypeHandle, string> GetQueries = new ConcurrentDictionary<RuntimeTypeHandle, string>();
@@ -114,7 +115,41 @@ namespace Dapper.Contrib.Extensions
             KeyProperties[type.TypeHandle] = keyProperties;
             return keyProperties;
         }
+        
+        private static List<PropertyInfo> KeyAndExplicitKeyPropertiesCache(Type type)
+        {
 
+            IEnumerable<PropertyInfo> pi;
+            if (KeyAndExplicitKeyProperties.TryGetValue(type.TypeHandle, out pi))
+            {
+                return pi.ToList();
+            }
+
+            var allProperties = TypePropertiesCache(type);
+            var keyProperties = allProperties.Where(p =>
+            {
+                return p.GetCustomAttributes(true).Any(a => a is KeyAttribute || a is ExplicitKeyAttribute);
+            }).ToList();
+
+            keyProperties = (from property in keyProperties
+                let orderAttribute =
+                    property.GetCustomAttributes(typeof (OrderAttribute), false).SingleOrDefault() as OrderAttribute
+                orderby orderAttribute.Order
+                select property).ToList();
+
+            if (keyProperties.Count == 0)
+            {
+                var idProp = allProperties.FirstOrDefault(p => p.Name.ToLower() == "id");
+                if (idProp != null && !idProp.GetCustomAttributes(true).Any(a => a is ExplicitKeyAttribute))
+                {
+                    keyProperties.Add(idProp);
+                }
+            }
+
+            KeyAndExplicitKeyProperties[type.TypeHandle] = keyProperties;
+            return keyProperties;
+        }
+        
         private static List<PropertyInfo> TypePropertiesCache(Type type)
         {
             IEnumerable<PropertyInfo> pis;
@@ -667,24 +702,35 @@ namespace Dapper.Contrib.Extensions
         public string Name { get; set; }
     }
 
+    [AttributeUsage(AttributeTargets.Property, Inherited = false, AllowMultiple = false)]
+    public class OrderAttribute : Attribute
+    {
+        public OrderAttribute([System.Runtime.CompilerServices.CallerLineNumber]int order = 0)
+        {
+            Order = order;
+        }
+        public int Order { get; }
+    }
+
     // do not want to depend on data annotations that is not in client profile
     [AttributeUsage(AttributeTargets.Property)]
-    public class KeyAttribute : Attribute
+    public class KeyAttribute : OrderAttribute
     {
-        public KeyAttribute()
+        public KeyAttribute():base()
         {
-            Order = 0;
+            Order = base.Order;
         }
-        public KeyAttribute(int keyOrder)
-        {
-            Order = keyOrder;
-        }
-        public int Order { get; set; }
+        public new int Order { get; }
     }
 
     [AttributeUsage(AttributeTargets.Property)]
-    public class ExplicitKeyAttribute : Attribute
+    public class ExplicitKeyAttribute : OrderAttribute
     {
+        public ExplicitKeyAttribute():base()
+        {
+            Order = base.Order;
+        }
+        public new int Order { get; }
     }
 
     [AttributeUsage(AttributeTargets.Property)]
