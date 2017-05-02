@@ -185,6 +185,77 @@ namespace Dapper.Contrib.Extensions
 
             return keys.Any() ? keys.First() : explicitKeys.First();
         }
+        
+        /// <summary>
+        /// Returns a single entity by multi key from table "T".  
+        /// keyValues is list of columns with values that must be marked with [Key] attribute or [ExplicitKey] attribute.
+        /// </summary>
+        /// <typeparam name="T">Interface or type to create and populate</typeparam>
+        /// <param name="connection">Open SqlConnection</param>
+        /// <param name="keyValues">Columns of the entity to get, must be marked with [Key] attribute or [ExplicitKey] attribute</param>
+        /// <param name="transaction">The transaction to run under, null (the default) if none</param>
+        /// <param name="commandTimeout">Number of seconds before command execution timeout</param>
+        /// <returns>Entity of T</returns>
+        public static T Get<T>(this IDbConnection connection, object[] keyValues, IDbTransaction transaction = null, int? commandTimeout = null) where T : class
+        {
+            var type = typeof(T);
+            var keys = KeyAndExplicitKeyPropertiesCache(type);
+            var keyCount = keys.Count;
+            if (keyValues.Length != keyCount)
+                throw new ArgumentException("Incorrect number of keys passed to Get method");
+
+            string sql;
+            var dynParms = new DynamicParameters();
+            if (!GetQueries.TryGetValue(type.TypeHandle, out sql))
+            {
+                sql = $"select * from {name} where ";
+
+                var myList = keyValues as System.Collections.IEnumerable;
+                if (myList != null)
+                {
+                    foreach (var element in myList)
+                    {
+                        var json = new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(element);
+                        var dict = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<Dictionary<string, object>>(json);
+                        foreach (var key1 in dict.Keys)
+                        {
+                            if (keys.All(x => x.Name != key1))
+                            {
+                                throw new ArgumentException("Incorrect key name of keys passed to Get method");
+                            }
+                            sql += key1 + " = @" + key1 + " and ";
+                            dynParms.Add("@"+ key1, dict[key1]);
+                        }
+                    }
+                }
+                sql = sql.Substring(0, sql.Length - 4);
+                GetQueries[type.TypeHandle] = sql;
+            }
+
+            T obj;
+            if (type.IsInterface)
+            {
+                var res = connection.Query(sql, dynParms).FirstOrDefault() as IDictionary<string, object>;
+
+                if (res == null)
+                    return null;
+
+                obj = ProxyGenerator.GetInterfaceProxy<T>();
+
+                foreach (var property in TypePropertiesCache(type))
+                {
+                    var val = res[property.Name];
+                    property.SetValue(obj, Convert.ChangeType(val, property.PropertyType), null);
+                }
+
+                ((IProxy)obj).IsDirty = false;   //reset change tracking and return
+            }
+            else
+            {
+                obj = connection.Query<T>(sql, dynParms, transaction, commandTimeout: commandTimeout).FirstOrDefault();
+            }
+            return obj;
+        }
 
         /// <summary>
         /// Returns a single entity by a single id from table "Ts".  
